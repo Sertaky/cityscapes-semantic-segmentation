@@ -4,13 +4,13 @@ A portfolio project for 19-class semantic segmentation on Cityscapes, beginning 
 
 ## Project status
 
-Repository setup and official label integration are the current milestone. **The dataset has not been downloaded, and no real dataset audit has been run.** No training or evaluation results are claimed.
+Repository setup, official label integration, and the local dataset audit are complete. The audit findings are in [reports/dataset_audit.md](reports/dataset_audit.md). The raw dataset is kept locally and ignored by Git. No model training or evaluation results are claimed.
 
-## Planned dataset
+## Dataset
 
 Use the official [Cityscapes dataset](https://www.cityscapes-dataset.com/) `leftImg8bit` images and `gtFine` annotations. The project uses [cityscapesscripts](https://github.com/mcordts/cityscapesScripts) for authoritative label definitions. Dataset files and archives stay outside Git and are not redistributed here.
 
-Expected local layout once downloaded:
+Local layout:
 
 ```text
 <dataset-root>/
@@ -23,6 +23,10 @@ Official test labels are not public. The planned evaluation split is:
 - Official `train` → development train and development validation.
 - Official `val` → final held-out labeled evaluation.
 - Official `test` → optional qualitative inspection or benchmark submission only.
+
+## Development split
+
+The tracked [city-level manifest](configs/splits/cityscapes_dev_split.json) divides official `train` into **2,662 development-training images** and **313 development-validation images** from **jena, krefeld, and ulm**. City separation reduces scene and location leakage compared with randomly splitting images. `src/cityscapes_segmentation/data/splits.py` validates the city lists, image membership, and semantic-mask paths against a dataset root supplied by the caller. Official `val` remains untouched for final held-out labeled evaluation; official `test` is not used for local semantic metrics.
 
 ## Task definition
 
@@ -65,11 +69,15 @@ The primary metric is mean intersection over union (mIoU) across the 19 evaluate
 ```text
 scripts/inspect_cityscapes.py             Future dataset audit entry point
 src/cityscapes_segmentation/data/labels.py Official label mapping helpers
+src/cityscapes_segmentation/data/splits.py City-level development split validation
+configs/splits/cityscapes_dev_split.json   Tracked development split manifest
+reports/dataset_audit.md                  Local dataset audit findings
 src/cityscapes_segmentation/models/        Planned model definitions
 src/cityscapes_segmentation/engine/        Planned training and evaluation
 src/cityscapes_segmentation/analysis/      Planned experiment analysis
 src/cityscapes_segmentation/utils/         Shared utilities
 tests/test_labels.py                       Synthetic mapping tests
+tests/test_splits.py                       Split unit and optional local integration tests
 ```
 
 ## Environment setup
@@ -93,8 +101,8 @@ Install the matching PyTorch pair before the requirements files so their version
 
 Register or sign in at the [official Cityscapes website](https://www.cityscapes-dataset.com/) and download `leftImg8bit` and `gtFine` there. Extract them under a local dataset root outside the repository or an ignored local `data/` directory. Do not commit raw data or downloaded archives. The `cityscapesscripts` package provides the label reference and optional preparation tools.
 
-After downloading, the audit entry point will accept `--dataset-root` and `--output-dir`. It currently checks for the expected directories and then reports that the real audit is pending; it does not generate statistics.
+The local dataset has been audited; see [reports/dataset_audit.md](reports/dataset_audit.md). `scripts/inspect_cityscapes.py` remains a preflight skeleton and does not regenerate that report.
 
 ## Next milestone
 
-Download the official files, implement and run the real dataset audit, verify image and mask pairs and label frequencies, then build the custom U-Net baseline.
+Review the development split and its tests before implementing the Dataset class and custom U-Net baseline.

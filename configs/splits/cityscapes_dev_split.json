@@ -1,0 +1,25 @@
+{
+  "source_split": "train",
+  "dev_val_cities": [
+    "jena",
+    "krefeld",
+    "ulm"
+  ],
+  "dev_train_cities": [
+    "aachen",
+    "bochum",
+    "bremen",
+    "cologne",
+    "darmstadt",
+    "dusseldorf",
+    "erfurt",
+    "hamburg",
+    "hanover",
+    "monchengladbach",
+    "strasbourg",
+    "stuttgart",
+    "tubingen",
+    "weimar",
+    "zurich"
+  ]
+}
