@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+env/
+checkpoints/
+outputs/
+
+# Raw Cityscapes data and downloaded archives must stay local.
+/data/
+/datasets/
+leftImg8bit/
+gtFine/
+gtCoarse/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
