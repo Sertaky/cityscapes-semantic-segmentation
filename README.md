@@ -36,6 +36,10 @@ The target is a 19-class semantic mask with train IDs `0..18` and ignore index `
 
 The Dataset takes image paths selected by the development split utility. It reads RGB images from `leftImg8bit` and semantic raw-ID masks from `gtFine/*_labelIds.png`, then maps raw IDs to train IDs `0..18` or ignore index `255`. Baseline transforms resize to **512×256** using bilinear interpolation for RGB and nearest-neighbor interpolation for masks. Images become normalized `float32` tensors with ImageNet mean/std and shape `[3,256,512]`; categorical targets remain unnormalized `int64` tensors with shape `[256,512]`. Training may apply one synchronized horizontal flip to image and mask; development validation is deterministic.
 
+## Model baseline
+
+The custom U-Net has four encoder stages (64, 128, 256, 512 channels), a 1024-channel bottleneck, and four decoder stages (512, 256, 128, 64 channels) with skip concatenation. It has no pretrained encoder. For input `[B,3,256,512]`, it returns **raw logits** `[B,19,256,512]` for a later cross-entropy loss; forward does not apply softmax, sigmoid, or argmax. Other input heights and widths must be at least 32 and divisible by 16.
+
 ## Planned class mapping
 
 The [official Cityscapes label table](https://github.com/mcordts/cityscapesScripts/blob/master/cityscapesscripts/helpers/labels.py) is loaded at runtime; this table documents its 19 evaluated train IDs.
@@ -77,6 +81,7 @@ src/cityscapes_segmentation/data/splits.py City-level development split validati
 src/cityscapes_segmentation/data/dataset.py RGB/semantic-mask sample loading
 src/cityscapes_segmentation/data/transforms.py Paired baseline transforms
 src/cityscapes_segmentation/analysis/metrics.py Confusion-matrix metrics
+src/cityscapes_segmentation/models/unet.py Custom U-Net baseline
 configs/splits/cityscapes_dev_split.json   Tracked development split manifest
 reports/dataset_audit.md                  Local dataset audit findings
 src/cityscapes_segmentation/models/        Planned model definitions
@@ -88,6 +93,7 @@ tests/test_splits.py                       Split unit and optional local integra
 tests/test_dataset.py                      Dataset unit and optional local integration tests
 tests/test_transforms.py                   Synthetic transform tests
 tests/test_metrics.py                      Synthetic metric tests
+tests/test_unet.py                         U-Net shape and gradient checks
 ```
 
 ## Environment setup
@@ -115,4 +121,4 @@ The local dataset has been audited; see [reports/dataset_audit.md](reports/datas
 
 ## Next milestone
 
-Review the data pipeline before implementing the custom U-Net baseline.
+Review the model baseline before implementing the training engine.
