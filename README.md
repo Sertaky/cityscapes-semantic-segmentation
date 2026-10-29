@@ -64,9 +64,9 @@ The [official Cityscapes label table](https://github.com/mcordts/cityscapesScrip
 
 Official ignored labels, including raw ID `-1` for license plate, become `255` in training targets. An input `255` ignore sentinel remains `255`.
 
-## Planned metrics
+## Metrics
 
-The primary metric is mean intersection over union (mIoU) across the 19 evaluated classes, excluding ignored pixels. Per-class IoU and inference speed will be reported in later milestones. There are no measurements yet.
+Primary: mean intersection over union (mIoU). Secondary: per-class IoU, mean/per-class Dice, and pixel accuracy. These are computed from one accumulated confusion matrix across batches, with target ignore index `255` excluded from all counts. A class absent from both targets and predictions has undefined (NaN) IoU/Dice and is omitted from macro means. Inference speed will be measured later; no model results are claimed yet.
 
 ## Repository structure
 
@@ -76,6 +76,7 @@ src/cityscapes_segmentation/data/labels.py Official label mapping helpers
 src/cityscapes_segmentation/data/splits.py City-level development split validation
 src/cityscapes_segmentation/data/dataset.py RGB/semantic-mask sample loading
 src/cityscapes_segmentation/data/transforms.py Paired baseline transforms
+src/cityscapes_segmentation/analysis/metrics.py Confusion-matrix metrics
 configs/splits/cityscapes_dev_split.json   Tracked development split manifest
 reports/dataset_audit.md                  Local dataset audit findings
 src/cityscapes_segmentation/models/        Planned model definitions
@@ -86,6 +87,7 @@ tests/test_labels.py                       Synthetic mapping tests
 tests/test_splits.py                       Split unit and optional local integration tests
 tests/test_dataset.py                      Dataset unit and optional local integration tests
 tests/test_transforms.py                   Synthetic transform tests
+tests/test_metrics.py                      Synthetic metric tests
 ```
 
 ## Environment setup
