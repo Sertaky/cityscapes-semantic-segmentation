@@ -32,6 +32,10 @@ The tracked [city-level manifest](configs/splits/cityscapes_dev_split.json) divi
 
 The target is a 19-class semantic mask with train IDs `0..18` and ignore index `255`. Raw `*_labelIds.png` masks must be converted with `map_raw_ids_to_train_ids`; already converted `*_labelTrainIds.png` masks must not be converted a second time. Unknown raw IDs raise an error. The planned baseline input resolution is **512 × 256** (width × height), and the initial loss is `CrossEntropyLoss(ignore_index=255)`.
 
+## Data pipeline
+
+The Dataset takes image paths selected by the development split utility. It reads RGB images from `leftImg8bit` and semantic raw-ID masks from `gtFine/*_labelIds.png`, then maps raw IDs to train IDs `0..18` or ignore index `255`. Baseline transforms resize to **512×256** using bilinear interpolation for RGB and nearest-neighbor interpolation for masks. Images become normalized `float32` tensors with ImageNet mean/std and shape `[3,256,512]`; categorical targets remain unnormalized `int64` tensors with shape `[256,512]`. Training may apply one synchronized horizontal flip to image and mask; development validation is deterministic.
+
 ## Planned class mapping
 
 The [official Cityscapes label table](https://github.com/mcordts/cityscapesScripts/blob/master/cityscapesscripts/helpers/labels.py) is loaded at runtime; this table documents its 19 evaluated train IDs.
@@ -70,6 +74,8 @@ The primary metric is mean intersection over union (mIoU) across the 19 evaluate
 scripts/inspect_cityscapes.py             Future dataset audit entry point
 src/cityscapes_segmentation/data/labels.py Official label mapping helpers
 src/cityscapes_segmentation/data/splits.py City-level development split validation
+src/cityscapes_segmentation/data/dataset.py RGB/semantic-mask sample loading
+src/cityscapes_segmentation/data/transforms.py Paired baseline transforms
 configs/splits/cityscapes_dev_split.json   Tracked development split manifest
 reports/dataset_audit.md                  Local dataset audit findings
 src/cityscapes_segmentation/models/        Planned model definitions
@@ -78,6 +84,8 @@ src/cityscapes_segmentation/analysis/      Planned experiment analysis
 src/cityscapes_segmentation/utils/         Shared utilities
 tests/test_labels.py                       Synthetic mapping tests
 tests/test_splits.py                       Split unit and optional local integration tests
+tests/test_dataset.py                      Dataset unit and optional local integration tests
+tests/test_transforms.py                   Synthetic transform tests
 ```
 
 ## Environment setup
@@ -105,4 +113,4 @@ The local dataset has been audited; see [reports/dataset_audit.md](reports/datas
 
 ## Next milestone
 
-Review the development split and its tests before implementing the Dataset class and custom U-Net baseline.
+Review the data pipeline before implementing the custom U-Net baseline.
