@@ -72,6 +72,10 @@ Official ignored labels, including raw ID `-1` for license plate, become `255` i
 
 Primary: mean intersection over union (mIoU). Secondary: per-class IoU, mean/per-class Dice, and pixel accuracy. These are computed from one accumulated confusion matrix across batches, with target ignore index `255` excluded from all counts. A class absent from both targets and predictions has undefined (NaN) IoU/Dice and is omitted from macro means. Inference speed will be measured later; no model results are claimed yet.
 
+## Training engine
+
+`train_one_epoch` and `validate_one_epoch` use sample-weighted mean batch loss. Validation derives mIoU and secondary metrics from one accumulated confusion matrix, and the entry point selects `best.pt` only when **development-validation mIoU** improves; it also writes `last.pt`. Checkpoints contain model and optimizer state, epoch, best mIoU, and config under the Git-ignored `checkpoints/` directory. `scripts/train_baseline.py` wires the city-separated development split to this engine. Python, NumPy, and PyTorch are seeded (default 42); fully deterministic CUDA algorithms are not forced. Only a bounded infrastructure smoke run has been performed so far; its metrics are not model-quality results. Official `val` remains untouched.
+
 ## Repository structure
 
 ```text
@@ -82,6 +86,9 @@ src/cityscapes_segmentation/data/dataset.py RGB/semantic-mask sample loading
 src/cityscapes_segmentation/data/transforms.py Paired baseline transforms
 src/cityscapes_segmentation/analysis/metrics.py Confusion-matrix metrics
 src/cityscapes_segmentation/models/unet.py Custom U-Net baseline
+src/cityscapes_segmentation/engine/train.py One-epoch train/validation loops
+src/cityscapes_segmentation/engine/checkpoint.py Checkpoint save/load
+scripts/train_baseline.py                  Development-split training entry point
 configs/splits/cityscapes_dev_split.json   Tracked development split manifest
 reports/dataset_audit.md                  Local dataset audit findings
 src/cityscapes_segmentation/models/        Planned model definitions
@@ -94,6 +101,8 @@ tests/test_dataset.py                      Dataset unit and optional local integ
 tests/test_transforms.py                   Synthetic transform tests
 tests/test_metrics.py                      Synthetic metric tests
 tests/test_unet.py                         U-Net shape and gradient checks
+tests/test_engine.py                       Synthetic engine checks
+tests/test_checkpoint.py                   Checkpoint roundtrip checks
 ```
 
 ## Environment setup
