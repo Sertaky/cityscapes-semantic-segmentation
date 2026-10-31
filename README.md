@@ -2,17 +2,17 @@
 
 A reproducible 19-class semantic-segmentation project built around Cityscapes and a custom U-Net trained from scratch. The repository covers the path from raw-data validation and official label integration through deterministic splitting, paired transforms, confusion-matrix metrics, checkpointed training, controlled experiments, and failure analysis.
 
-The current best **development** result is Baseline 02 with **0.551079 mIoU** on a 313-image, city-separated development-validation split. The official Cityscapes validation set remains untouched, so this is not a final or official benchmark result.
+The current best **development** result is Baseline 03 with **0.561506 mIoU** on a 313-image, city-separated development-validation split. The official Cityscapes validation set remains untouched, so this is not a final or official benchmark result.
 
 ## Key results
 
-| Experiment | Loss | Best epoch | Dev-val mIoU | Mean Dice | Pixel accuracy |
-|---|---|---:|---:|---:|---:|
-| Baseline 01 | Cross-entropy | 26 | 0.524634 | 0.641598 | 0.928686 |
-| Baseline 02 | Sqrt-inverse-frequency weighted cross-entropy | 28 | **0.551079** | **0.684990** | 0.912909 |
-| Change | One controlled loss-weighting change | — | **+0.026445** | **+0.043392** | -0.015777 |
+| Experiment | Loss / weighting | Resolution | Best epoch | Dev-val mIoU | Mean Dice | Pixel accuracy |
+|---|---|---:|---:|---:|---:|---:|
+| Baseline 01 | Plain cross-entropy | 512x256 | 26 | 0.524634 | 0.641598 | **0.928686** |
+| Baseline 02 | Frequency^-0.5 weighted cross-entropy | 512x256 | 28 | 0.551079 | 0.684990 | 0.912909 |
+| **Baseline 03** | **Frequency^-0.25 weighted cross-entropy** | **512x256** | **30** | **0.561506** | **0.689985** | 0.926736 |
 
-Weighted cross-entropy substantially improved rare-class recognition, including rider, motorcycle, train, truck, and bus. It also exposed a clear tradeoff: some common classes regressed, and traffic-light predictions became overly frequent. The project treats that tradeoff as evidence to investigate, not as a reason to report a single aggregate metric without context.
+Relative to Baseline 01, Baseline 03 improved mIoU by `0.036873` and mean Dice by `0.048386`, while pixel accuracy was `0.001949` lower. Relative to Baseline 02, it improved mIoU by `0.010427`, mean Dice by `0.004995`, and pixel accuracy by `0.013828`. These are development-validation comparisons, not official held-out results.
 
 ## Objective
 
@@ -125,7 +125,7 @@ Checkpoint loading includes compatibility coverage for the current format. Pytho
 
 ## Controlled experiment protocol
 
-Both completed baselines used the same locked protocol except for the loss weights:
+All three completed baselines used the same locked protocol except for the class-weighting definition:
 
 | Setting | Value |
 |---|---|
@@ -222,20 +222,112 @@ Common-class IoU regressions were:
 
 Confusion changes included strong increases in building to traffic-light predictions, person to rider predictions, and car to truck/motorcycle predictions. These patterns are **consistent with weighting-driven redistribution**, but the comparison does not by itself prove causality.
 
+### Baseline 03 — mild weighted cross-entropy
+
+Baseline 03 changed only the class-weight exponent from `frequency^-0.5` to `frequency^-0.25`. Weights were again derived exclusively from development train and normalized to a mean of one. Architecture, resolution, augmentation, optimizer, scheduler, batch size, epoch count, seed, and model-selection policy remained identical to Baseline 02.
+
+The milder profile reduced the max/min weight ratio from approximately `19.48x` to `4.41x`. Selected weights were:
+
+| Class | Weight | Class | Weight | Class | Weight |
+|---|---:|---|---:|---|---:|
+| road | 0.386984 | traffic light | 1.400442 | rider | 1.577222 |
+| building | 0.437245 | motorcycle | 1.708051 | truck | 1.324234 |
+| car | 0.584177 | train | 1.367434 | bus | 1.374885 |
+
+The best checkpoint occurred at epoch 30:
+
+- mIoU: **0.561506**
+- Mean Dice: **0.689985**
+- Pixel accuracy: **0.926736**
+
+This is the highest city-separated development-validation mIoU produced so far.
+
+#### Common-class recovery
+
+Baseline 03 recovered most or all of the common-class regression introduced by the more aggressive Baseline 02 weights:
+
+| Class | Baseline 02 IoU | Baseline 03 IoU |
+|---|---:|---:|
+| road | 0.9603 | **0.9675** |
+| sidewalk | 0.7681 | **0.7981** |
+| building | 0.8431 | **0.8699** |
+| vegetation | 0.8548 | **0.8701** |
+| sky | 0.8777 | **0.9066** |
+| car | 0.8802 | **0.8994** |
+
+#### Priority-class tradeoff
+
+| Class | Baseline 01 IoU | Baseline 02 IoU | Baseline 03 IoU |
+|---|---:|---:|---:|
+| rider | 0.0246 | **0.3619** | 0.2751 |
+| motorcycle | 0.1793 | **0.3630** | 0.3165 |
+| train | 0.2260 | **0.3448** | 0.2732 |
+| truck | 0.2539 | 0.3427 | **0.3581** |
+| bus | 0.2757 | **0.4193** | 0.3362 |
+| traffic light | 0.3544 | 0.3105 | **0.3850** |
+| bicycle | 0.4474 | 0.4316 | **0.4719** |
+
+The milder weights gave up some of Baseline 02's largest rider, motorcycle, train, and bus gains, but retained substantial improvement over plain cross-entropy while restoring common-class quality and improving aggregate mIoU.
+
+Traffic-light behavior became substantially more balanced:
+
+| Traffic-light metric | Baseline 01 | Baseline 02 | Baseline 03 |
+|---|---:|---:|---:|
+| Precision | 0.7209 | 0.3716 | 0.5460 |
+| Recall | 0.4107 | 0.6539 | 0.5664 |
+| IoU | 0.3544 | 0.3105 | **0.3850** |
+| Predicted/GT ratio | 0.570x | 1.760x | **1.037x** |
+
+Baseline 03 largely corrected Baseline 02's traffic-light overprediction while retaining higher recall than Baseline 01. This does not imply perfect probability calibration.
+
+#### Baseline 03 residual failure analysis
+
+The independently recomputed 19x19 confusion matrix matched the saved Baseline 03 result exactly. Residual focus-class behavior was:
+
+| Class | Precision | Recall | IoU | Predicted/GT |
+|---|---:|---:|---:|---:|
+| rider | 0.5233 | 0.3671 | 0.2751 | 0.701x |
+| motorcycle | 0.4890 | 0.4729 | 0.3165 | 0.967x |
+| train | 0.4088 | 0.4516 | 0.2732 | 1.105x |
+| bus | 0.5554 | 0.4600 | 0.3362 | 0.828x |
+
+Rider remained strongly confused with person. Motorcycle errors were distributed across rider, bicycle, person, and car. Train was primarily confused with building and bus, while bus was primarily confused with train and truck.
+
+Component-size diagnostics showed a steep performance drop for small and medium semantic regions at the 256x512 tensor resolution:
+
+| Class | Small recall proxy | Medium recall proxy | Large recall proxy | Approx. components below 50 px |
+|---|---:|---:|---:|---:|
+| rider | 0.011 | 0.056 | 0.392 | 53.9% |
+| motorcycle | 0.053 | 0.196 | 0.495 | 44.7% |
+| train | 0.000 | 0.004 | 0.477 | 21.7% |
+| bus | 0.038 | 0.050 | 0.473 | 38.6% |
+
+The component bins use observed per-class area tertiles, and original-resolution component area divided by 16 provides the below-50-pixel estimate. This is a diagnostic semantic-mask proxy, not official Cityscapes instance-size evaluation.
+
+Boundary errors were also substantially higher than interior errors:
+
+| Class | Boundary error | Interior error |
+|---|---:|---:|
+| rider | 79.95% | 46.02% |
+| motorcycle | 69.62% | 44.38% |
+| train | 75.29% | 51.51% |
+| bus | 69.18% | 51.62% |
+
+The result supports detail/localization as a meaningful residual problem, but high interior error shows that higher resolution cannot be expected to eliminate semantic confusion by itself. Across all 19 classes, Spearman rank correlation was `0.8719` between validation support and IoU and `0.8421` between support and recall. Rare support therefore remains strongly associated with weaker performance after mild weighting; the relationship is descriptive, not causal proof.
+
 ## Current conclusion and next hypothesis
 
-**Current best development model:** Baseline 02, selected by the highest city-separated development-validation mIoU. It is not designated as the final model, and the official validation set has not yet been used.
+**Current best development model:** Baseline 03 — mild weighted cross-entropy, selected by the highest city-separated development-validation mIoU of **0.561506**. It is not designated as the final model, and the official validation set remains untouched.
 
-The next evidence-based candidate is a milder weighting exponent:
+The next evidence-based controlled experiment is a resolution change from **512x256 to 640x320**, with all other Baseline 03 settings held constant. Further blind exponent tuning is not justified by the current evidence.
 
-```text
-weight[c] proportional to frequency[c]^-0.25
-mean(weight) = 1
-```
+One-step memory probes found:
 
-The diagnostic candidate has a minimum weight of `0.386984`, maximum weight of `1.708051`, and max/min ratio of `4.413747x`, compared with approximately `19.48x` for Baseline 02. The hypothesis is that milder weighting may retain rare-class gains while reducing overprediction and common-class regression.
+- 768x384, batch size 1: comfortable;
+- 768x384, batch size 2: the step completed, but reserved memory exceeded reported physical VRAM under WDDM, making a full run unsafe;
+- 640x320, batch size 2: finite training step, approximately 2,407 MiB allocated and 3,144 MiB reserved.
 
-**Baseline 03 has not been run.** No candidate metrics are claimed.
+The 640x320 candidate preserves batch size 2, making input resolution the only intended Baseline 04 change. **Baseline 04 has not been run.**
 
 ## Project structure
 
@@ -250,6 +342,8 @@ scripts/
   analyze_baseline_01.py          Baseline 01 failure analysis
   run_baseline_02.py              Locked Baseline 02 runner
   analyze_baseline_02.py          Baseline 02 regression analysis
+  run_baseline_03.py              Locked Baseline 03 runner
+  analyze_baseline_03.py          Baseline 03 residual analysis and memory probes
 src/cityscapes_segmentation/
   data/                            Labels, splits, Dataset, paired transforms
   models/                          Custom U-Net
@@ -301,10 +395,11 @@ Some integration checks skip cleanly when raw Cityscapes data is unavailable.
 
 The reported experiments ran locally on an **NVIDIA GeForce RTX 3050 Laptop GPU with 4 GB VRAM** using PyTorch `2.13.0+cu130`, torchvision `0.28.0+cu130`, and a CUDA 13.0 build.
 
-| Experiment | 30-epoch time | Peak CUDA reserved |
-|---|---:|---:|
-| Baseline 01 | approximately 6h 54m | 2,062 MiB |
-| Baseline 02 | approximately 6h 20m | 2,062 MiB |
+| Experiment | 30-epoch time | Peak CUDA allocated | Peak CUDA reserved |
+|---|---:|---:|---:|
+| Baseline 01 | approximately 6h 54m | — | 2,062 MiB |
+| Baseline 02 | approximately 6h 20m | — | 2,062 MiB |
+| Baseline 03 | approximately 6h 10m | approximately 1.82 GiB | approximately 2.06 GiB |
 
 These are local workflow measurements, not hardware benchmarks.
 
