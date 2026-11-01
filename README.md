@@ -2,17 +2,20 @@
 
 A reproducible 19-class semantic-segmentation project built around Cityscapes and a custom U-Net trained from scratch. The repository covers the path from raw-data validation and official label integration through deterministic splitting, paired transforms, confusion-matrix metrics, checkpointed training, controlled experiments, and failure analysis.
 
-The current best **development** result is Baseline 03 with **0.561506 mIoU** on a 313-image, city-separated development-validation split. The official Cityscapes validation set remains untouched, so this is not a final or official benchmark result.
+The current best **development** result is Baseline 04 with **0.569926 mIoU** on a 313-image, city-separated development-validation split. The official Cityscapes validation set remains untouched, so this is neither a final model designation nor an official benchmark result.
 
 ## Key results
 
-| Experiment | Loss / weighting | Resolution | Best epoch | Dev-val mIoU | Mean Dice | Pixel accuracy |
+| Experiment | Controlled change | Resolution | Best epoch | Dev-val mIoU | Mean Dice | Pixel accuracy |
 |---|---|---:|---:|---:|---:|---:|
 | Baseline 01 | Plain cross-entropy | 512x256 | 26 | 0.524634 | 0.641598 | **0.928686** |
 | Baseline 02 | Frequency^-0.5 weighted cross-entropy | 512x256 | 28 | 0.551079 | 0.684990 | 0.912909 |
-| **Baseline 03** | **Frequency^-0.25 weighted cross-entropy** | **512x256** | **30** | **0.561506** | **0.689985** | 0.926736 |
+| Baseline 03 | Frequency^-0.25 weighted cross-entropy | 512x256 | 30 | 0.561506 | 0.689985 | 0.926736 |
+| **Baseline 04** | **Higher resolution only** | **640x320** | **30** | **0.569926** | **0.698703** | **0.927832** |
 
-Relative to Baseline 01, Baseline 03 improved mIoU by `0.036873` and mean Dice by `0.048386`, while pixel accuracy was `0.001949` lower. Relative to Baseline 02, it improved mIoU by `0.010427`, mean Dice by `0.004995`, and pixel accuracy by `0.013828`. These are development-validation comparisons, not official held-out results.
+Baseline 04 is the current best development model under the locked selection rule. Relative to Baseline 03, it improved mIoU by `0.008420`, mean Dice by `0.008718`, and pixel accuracy by `0.001096`. These are development-validation comparisons, not official held-out results.
+
+![Development-validation metrics across Baselines 01-04](docs/figures/experiment_metrics.png)
 
 ## Objective
 
@@ -63,8 +66,8 @@ The locally supplied test `labelIds` contain only ignored/non-evaluation raw cla
 | RGB source | `leftImg8bit` |
 | Semantic target | `gtFine/*_gtFine_labelIds.png` |
 | Label conversion | Official raw ID to train ID `0..18`; ignored labels to `255` |
-| Image tensor | `[3, 256, 512]`, `torch.float32` |
-| Target tensor | `[256, 512]`, `torch.int64` |
+| Image tensor | `[3, H, W]`, `torch.float32`; 512x256 baseline, 640x320 in B04 |
+| Target tensor | `[H, W]`, `torch.int64` |
 | Image resize | Bilinear interpolation |
 | Mask resize | Nearest-neighbor interpolation |
 | Normalization | ImageNet mean and standard deviation |
@@ -78,12 +81,12 @@ Nearest-neighbor interpolation preserves categorical mask IDs; continuous interp
 The baseline is a custom U-Net with no pretrained encoder:
 
 ```text
-Input       [B, 3, 256, 512]
+Input       [B, 3, H, W]
 Encoder     64 -> 128 -> 256 -> 512
 Bottleneck  1024
 Decoder     512 -> 256 -> 128 -> 64
 Classifier  64 -> 19
-Output      [B, 19, 256, 512]
+Output      [B, 19, H, W]
 ```
 
 It uses four encoder and four decoder stages, `Conv2d -> BatchNorm2d -> ReLU` blocks, max-pooling, transposed-convolution upsampling, and channel-wise skip concatenation. The model returns raw logits for cross-entropy loss; it does not apply softmax or argmax in `forward()`.
@@ -92,7 +95,7 @@ It uses four encoder and four decoder stages, `Conv2d -> BatchNorm2d -> ReLU` bl
 - Trainable parameters: **31,038,803**
 - Training precision: FP32
 - Pretraining: none
-- Verified local feasibility: batch size 2 at 512x256 on an RTX 3050 Laptop GPU with 4 GB VRAM
+- Verified local feasibility: batch size 2 at both 512x256 and 640x320 on an RTX 3050 Laptop GPU with 4 GB VRAM
 
 ## Evaluation methodology
 
@@ -125,12 +128,12 @@ Checkpoint loading includes compatibility coverage for the current format. Pytho
 
 ## Controlled experiment protocol
 
-All three completed baselines used the same locked protocol except for the class-weighting definition:
+All four completed baselines used the same locked protocol except for one predeclared change per experiment: loss weighting in Baselines 02-03, then input resolution in Baseline 04.
 
 | Setting | Value |
 |---|---|
 | Model | Custom U-Net, `base_channels=64` |
-| Resolution | 512x256 |
+| Resolution | 512x256 through B03; 640x320 in B04 |
 | Optimizer | AdamW |
 | Learning rate | `1e-3` |
 | Weight decay | `1e-4` |
@@ -240,7 +243,7 @@ The best checkpoint occurred at epoch 30:
 - Mean Dice: **0.689985**
 - Pixel accuracy: **0.926736**
 
-This is the highest city-separated development-validation mIoU produced so far.
+This became the strongest development result before the controlled resolution experiment.
 
 #### Common-class recovery
 
@@ -315,25 +318,52 @@ Boundary errors were also substantially higher than interior errors:
 
 The result supports detail/localization as a meaningful residual problem, but high interior error shows that higher resolution cannot be expected to eliminate semantic confusion by itself. Across all 19 classes, Spearman rank correlation was `0.8719` between validation support and IoU and `0.8421` between support and recall. Rare support therefore remains strongly associated with weaker performance after mild weighting; the relationship is descriptive, not causal proof.
 
+### Baseline 04 - higher resolution
+
+Baseline 04 tested the detail-resolution hypothesis with one controlled change: input resolution increased from 512x256 to 640x320. It reused the exact Baseline 03 class weights and retained the same architecture, batch size, augmentation, optimizer, scheduler, seed, precision, epoch count, and model-selection rule.
+
+- Best epoch: **30**
+- mIoU: **0.569926**
+- Mean Dice: **0.698703**
+- Pixel accuracy: **0.927832**
+- Runtime: approximately **7h 55m**, or **28.5%** longer than Baseline 03
+- Peak CUDA memory: approximately **2,651 MiB allocated** and **3,144 MiB reserved**
+
+The higher resolution produced a modest aggregate improvement at a material compute cost. Its largest per-class IoU gains over Baseline 03 were bus (`+0.069541`), train (`+0.063427`), motorcycle (`+0.062219`), bicycle (`+0.030667`), and fence (`+0.029943`). Truck (`-0.075508`), traffic light (`-0.032297`), and traffic sign (`-0.016041`) regressed.
+
+![Baseline 04 per-class IoU change relative to Baseline 03](docs/figures/b04_per_class_iou_delta.png)
+
+#### Baseline 04 residual analysis
+
+The higher-resolution result only partially supports the original small-region hypothesis:
+
+- small-component recall did not improve broadly; gains were more consistent for medium or large components;
+- boundary improvements were mixed rather than universal;
+- truck precision and recall both fell, with increased semantic redistribution toward building and car across multiple scenes;
+- train and bus improved overall, but Krefeld contributed disproportionately and train/bus interchange remained substantial;
+- traffic-light prediction volume moved close to GT (`0.994x`), yet precision and recall both declined because localization and coverage worsened;
+- traffic-light/sign confusion increased modestly.
+
+These findings are consistent with resolution providing useful detail for some scenes and large vehicle regions while leaving semantic allocation and scene-context ambiguity unresolved. They do not establish architectural causality.
+
+The normalized confusion, scene-concentration, component, boundary, and bootstrap diagnostics are reproducible with [`scripts/analyze_baseline_04.py`](scripts/analyze_baseline_04.py); generated experiment outputs remain intentionally Git-ignored.
+
 ## Current conclusion and next hypothesis
 
-**Current best development model:** Baseline 03 — mild weighted cross-entropy, selected by the highest city-separated development-validation mIoU of **0.561506**. It is not designated as the final model, and the official validation set remains untouched.
+**Current best development model:** Baseline 04 - higher resolution, selected by the highest city-separated development-validation mIoU of **0.569926**. It is not designated as the final model. The 500-image official validation set remains untouched, and official test is not used for local semantic metrics.
 
-The next evidence-based controlled experiment is a resolution change from **512x256 to 640x320**, with all other Baseline 03 settings held constant. Further blind exponent tuning is not justified by the current evidence.
+The next proposed controlled experiment is **Baseline 05 - dilated bottleneck**. The only proposed change is to set `dilation=2` and `padding=2` in the two U-Net bottleneck convolutions, instead of `dilation=1` and `padding=1`. Resolution remains 640x320 and every other Baseline 04 setting remains locked.
 
-One-step memory probes found:
+This tests whether broader effective context reduces vehicle-class and city-specific semantic allocation errors. It is better supported than another resolution increase or another blind weight-exponent search. **Baseline 05 has not been run.**
 
-- 768x384, batch size 1: comfortable;
-- 768x384, batch size 2: the step completed, but reserved memory exceeded reported physical VRAM under WDDM, making a full run unsafe;
-- 640x320, batch size 2: finite training step, approximately 2,407 MiB allocated and 3,144 MiB reserved.
-
-The 640x320 candidate preserves batch size 2, making input resolution the only intended Baseline 04 change. **Baseline 04 has not been run.**
+![Controlled experiment progression from Baseline 01 through the proposed Baseline 05](docs/figures/experiment_progression.png)
 
 ## Project structure
 
 ```text
 configs/
   splits/                         Deterministic city-level split manifest
+docs/figures/                     Tracked experiment-summary visuals
 reports/                          Tracked dataset-audit summaries
 scripts/
   inspect_cityscapes.py           Dataset preflight utility
@@ -344,6 +374,9 @@ scripts/
   analyze_baseline_02.py          Baseline 02 regression analysis
   run_baseline_03.py              Locked Baseline 03 runner
   analyze_baseline_03.py          Baseline 03 residual analysis and memory probes
+  run_baseline_04.py              Locked higher-resolution experiment runner
+  analyze_baseline_04.py          Baseline 04 residual and context analysis
+  generate_readme_figures.py      Reproducible tracked README figures
 src/cityscapes_segmentation/
   data/                            Labels, splits, Dataset, paired transforms
   models/                          Custom U-Net
@@ -400,6 +433,7 @@ The reported experiments ran locally on an **NVIDIA GeForce RTX 3050 Laptop GPU 
 | Baseline 01 | approximately 6h 54m | — | 2,062 MiB |
 | Baseline 02 | approximately 6h 20m | — | 2,062 MiB |
 | Baseline 03 | approximately 6h 10m | approximately 1.82 GiB | approximately 2.06 GiB |
+| Baseline 04 | approximately 7h 55m | approximately 2,651 MiB | approximately 3,144 MiB |
 
 These are local workflow measurements, not hardware benchmarks.
 
