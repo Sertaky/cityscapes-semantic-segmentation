@@ -9,12 +9,28 @@ from torch import nn
 class DoubleConv(nn.Sequential):
     """Two spatially preserving Conv-BatchNorm-ReLU layers."""
 
-    def __init__(self, in_channels: int, out_channels: int) -> None:
+    def __init__(self, in_channels: int, out_channels: int, *, dilation: int = 1) -> None:
+        if not isinstance(dilation, int) or isinstance(dilation, bool) or dilation <= 0:
+            raise ValueError("dilation must be a positive integer")
         super().__init__(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(
+                in_channels,
+                out_channels,
+                kernel_size=3,
+                padding=dilation,
+                dilation=dilation,
+                bias=False,
+            ),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=3,
+                padding=dilation,
+                dilation=dilation,
+                bias=False,
+            ),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
         )
@@ -45,24 +61,32 @@ class UNet(nn.Module):
     divisible by 16. Output is raw ``[B, num_classes, H, W]`` logits.
     """
 
-    def __init__(self, in_channels: int = 3, num_classes: int = 19, base_channels: int = 64) -> None:
+    def __init__(
+        self,
+        in_channels: int = 3,
+        num_classes: int = 19,
+        base_channels: int = 64,
+        bottleneck_dilation: int = 1,
+    ) -> None:
         super().__init__()
         for name, value in (
             ("in_channels", in_channels),
             ("num_classes", num_classes),
             ("base_channels", base_channels),
+            ("bottleneck_dilation", bottleneck_dilation),
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
 
         self.in_channels = in_channels
+        self.bottleneck_dilation = bottleneck_dilation
         c = base_channels
         self.encoder1 = DoubleConv(in_channels, c)
         self.encoder2 = DoubleConv(c, 2 * c)
         self.encoder3 = DoubleConv(2 * c, 4 * c)
         self.encoder4 = DoubleConv(4 * c, 8 * c)
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.bottleneck = DoubleConv(8 * c, 16 * c)
+        self.bottleneck = DoubleConv(8 * c, 16 * c, dilation=bottleneck_dilation)
         self.decoder4 = UpBlock(16 * c, 8 * c)
         self.decoder3 = UpBlock(8 * c, 4 * c)
         self.decoder2 = UpBlock(4 * c, 2 * c)

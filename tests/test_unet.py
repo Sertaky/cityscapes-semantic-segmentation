@@ -57,6 +57,71 @@ def test_encoder_decoder_channels_and_skip_concatenation():
         assert decoder.conv[0].out_channels == output
 
 
+def test_default_unet_uses_standard_dilation_everywhere():
+    model = UNet(base_channels=8)
+    convolutions = [module for module in model.modules() if isinstance(module, nn.Conv2d)]
+    assert model.bottleneck_dilation == 1
+    assert all(convolution.dilation == (1, 1) for convolution in convolutions)
+    assert all(convolution.padding in {(0, 0), (1, 1)} for convolution in convolutions)
+
+
+def test_dilated_unet_changes_only_bottleneck_convolution_geometry():
+    standard = UNet(base_channels=8)
+    dilated = UNet(base_channels=8, bottleneck_dilation=2)
+    standard_convolutions = dict(standard.named_modules())
+    dilated_convolutions = dict(dilated.named_modules())
+
+    changed = []
+    for name, module in standard_convolutions.items():
+        if not isinstance(module, nn.Conv2d):
+            continue
+        counterpart = dilated_convolutions[name]
+        assert isinstance(counterpart, nn.Conv2d)
+        if module.dilation != counterpart.dilation or module.padding != counterpart.padding:
+            changed.append(name)
+
+    assert changed == ["bottleneck.0", "bottleneck.3"]
+    for name in changed:
+        convolution = dilated_convolutions[name]
+        assert convolution.dilation == (2, 2)
+        assert convolution.padding == (2, 2)
+
+
+def test_dilated_bottleneck_preserves_spatial_and_output_shapes():
+    model = UNet(base_channels=4, bottleneck_dilation=2).eval()
+    bottleneck_shape = None
+
+    def capture_shape(_module, _inputs, output):
+        nonlocal bottleneck_shape
+        bottleneck_shape = output.shape
+
+    handle = model.bottleneck.register_forward_hook(capture_shape)
+    with torch.inference_mode():
+        logits = model(torch.randn(1, 3, 320, 640))
+    handle.remove()
+
+    assert bottleneck_shape == (1, 64, 20, 40)
+    assert logits.shape == (1, 19, 320, 640)
+
+
+def test_dilation_does_not_change_parameter_count_or_state_dict_contract():
+    standard = UNet()
+    dilated = UNet(bottleneck_dilation=2)
+    assert sum(parameter.numel() for parameter in standard.parameters()) == 31_038_803
+    assert sum(parameter.numel() for parameter in dilated.parameters()) == 31_038_803
+    assert standard.state_dict().keys() == dilated.state_dict().keys()
+    for name, tensor in standard.state_dict().items():
+        assert tensor.shape == dilated.state_dict()[name].shape
+
+    restored_standard = UNet()
+    restored_standard.load_state_dict(standard.state_dict(), strict=True)
+
+
+def test_invalid_bottleneck_dilation_raises_clearly():
+    with pytest.raises(ValueError, match="bottleneck_dilation must be a positive integer"):
+        UNet(bottleneck_dilation=0)
+
+
 @pytest.mark.parametrize("shape", [(1, 3, 255, 512), (1, 3, 256, 510), (1, 3, 16, 32)])
 def test_invalid_spatial_dimensions_raise_clearly(shape):
     with pytest.raises(ValueError, match="at least 32 and divisible by 16"):
