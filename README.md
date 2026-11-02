@@ -1,398 +1,239 @@
 # Cityscapes Semantic Segmentation
 
-A reproducible 19-class semantic-segmentation project built around Cityscapes and a custom U-Net trained from scratch. The repository covers the path from raw-data validation and official label integration through deterministic splitting, paired transforms, confusion-matrix metrics, checkpointed training, controlled experiments, and failure analysis.
+End-to-end 19-class Cityscapes semantic-segmentation project built around a custom U-Net, a reproducible data pipeline, controlled one-variable experiments, failure analysis, and a frozen held-out evaluation.
 
-The current best **development** result is Baseline 04 with **0.569926 mIoU** on a 313-image, city-separated development-validation split. The official Cityscapes validation set remains untouched, so this is neither a final model designation nor an official benchmark result.
+The repository covers the complete engineering path from raw-data audit and official label integration through deterministic splitting, paired transforms, confusion-matrix metrics, checkpointed training, five controlled baselines, and a single evaluation of the frozen development winner on untouched official validation data.
 
 ## Key results
 
-| Experiment | Controlled change | Resolution | Best epoch | Dev-val mIoU | Mean Dice | Pixel accuracy |
-|---|---|---:|---:|---:|---:|---:|
-| Baseline 01 | Plain cross-entropy | 512x256 | 26 | 0.524634 | 0.641598 | **0.928686** |
-| Baseline 02 | Frequency^-0.5 weighted cross-entropy | 512x256 | 28 | 0.551079 | 0.684990 | 0.912909 |
-| Baseline 03 | Frequency^-0.25 weighted cross-entropy | 512x256 | 30 | 0.561506 | 0.689985 | 0.926736 |
-| **Baseline 04** | **Higher resolution only** | **640x320** | **30** | **0.569926** | **0.698703** | **0.927832** |
+| Evaluation stage | Model | Images | mIoU | Mean Dice | Pixel accuracy |
+|---|---|---:|---:|---:|---:|
+| Development validation | **Baseline 05 — dilated bottleneck** | 313 | **0.582557** | **0.711907** | **0.929086** |
+| Official held-out validation | Frozen Baseline 05 | 500 | **0.529051** | **0.655063** | **0.919040** |
 
-Baseline 04 is the current best development model under the locked selection rule. Relative to Baseline 03, it improved mIoU by `0.008420`, mean Dice by `0.008718`, and pixel accuracy by `0.001096`. These are development-validation comparisons, not official held-out results.
+Baseline 05 is the **frozen development winner**, selected before the official validation set was opened. The official result is a one-time held-out evaluation, not a second model-selection stage. No local semantic metrics were computed on the official test split.
 
-![Development-validation metrics across Baselines 01-04](docs/figures/experiment_metrics.png)
+![Frozen B05 development and official-validation comparison](docs/figures/dev_vs_official.png)
 
-## Objective
+## Problem and scope
 
-The engineering objective is to build a transparent segmentation baseline whose data membership, label semantics, transforms, metrics, training state, and experiment changes can all be audited. The task uses the 19 standard Cityscapes train IDs (`0..18`), with `255` as the ignore index.
+The task is dense semantic prediction for the 19 standard Cityscapes train IDs (`0..18`), with target value `255` excluded from loss and metrics. The project emphasizes transparent experimental reasoning: data membership, class semantics, preprocessing, model state, and every controlled change are auditable.
 
-This repository does not claim production readiness, official test performance, or final held-out performance.
+This work does not claim state-of-the-art performance, production readiness, or official test-set results.
 
-## Dataset and evaluation discipline
+## Dataset and split discipline
 
-The project uses Cityscapes `leftImg8bit` RGB images and `gtFine` semantic annotations. Raw label IDs are interpreted through [`cityscapesscripts`](https://github.com/mcordts/cityscapesScripts), the authoritative label source used by the project.
+The project uses Cityscapes `leftImg8bit` RGB images and `gtFine` semantic annotations. Raw IDs are interpreted through [`cityscapesscripts`](https://github.com/mcordts/cityscapesScripts), the authoritative label source used by the code.
 
 | Official split | Images | Project use |
 |---|---:|---|
-| `train` | 2,975 | Divided by city into development train and development validation |
-| `val` | 500 | Untouched; reserved for final held-out labeled evaluation |
+| `train` | 2,975 | City-separated development train and development validation |
+| `val` | 500 | Kept untouched during development; evaluated once after freezing B05 |
 | `test` | 1,525 | Not used for local semantic metrics |
 
-The deterministic development split is defined in [`configs/splits/cityscapes_dev_split.json`](configs/splits/cityscapes_dev_split.json):
+The deterministic split in [`configs/splits/cityscapes_dev_split.json`](configs/splits/cityscapes_dev_split.json) divides official train into:
 
 - **Development train:** 2,662 images from 15 cities.
-- **Development validation:** 313 images from **jena, krefeld, and ulm**.
-- **Official validation:** all 500 images remain untouched.
+- **Development validation:** 313 images from `jena`, `krefeld`, and `ulm`.
 
-City-level separation reduces scene and location leakage compared with a random image split. Every metric in the experiment sections below is a **development-validation metric**, not a test result.
+City-level separation reduces location leakage relative to random image splitting. The read-only dataset audit also verified all train/validation image-mask pairs, 2048×1024 dimensions, split/city integrity, absence of duplicate image content across splits, official raw-ID behavior, and substantial class imbalance. Detailed evidence is retained in [`reports/dataset_audit.md`](reports/dataset_audit.md), [`reports/class_pixel_frequencies.csv`](reports/class_pixel_frequencies.csv), and [`reports/city_class_distribution.csv`](reports/city_class_distribution.csv).
 
-### Audit findings
-
-The read-only audit verified:
-
-- all official train/validation image-mask pairs;
-- 2048x1024 image and annotation dimensions throughout;
-- no missing or malformed pairs;
-- no duplicate image content across official splits;
-- no city overlap across official train, validation, and test splits;
-- raw-ID behavior against `cityscapesscripts`;
-- train IDs `0..18` and ignore index `255`;
-- approximately 11.47% ignored pixels in official train and 12.55% in official validation;
-- substantial class imbalance, especially among human and vehicle subclasses.
-
-The locally supplied test `labelIds` contain only ignored/non-evaluation raw classes, producing no usable train-ID pixels. They are not used for local semantic evaluation. Detailed counts and class distributions are available in [`reports/dataset_audit.md`](reports/dataset_audit.md), [`reports/class_pixel_frequencies.csv`](reports/class_pixel_frequencies.csv), and [`reports/city_class_distribution.csv`](reports/city_class_distribution.csv).
+Raw images, annotations, checkpoints, and generated experiment outputs remain local and Git-ignored.
 
 ## Data pipeline
 
-`CityscapesSegmentationDataset` loads membership resolved by the split utility rather than duplicating split rules inside the Dataset.
+`CityscapesSegmentationDataset` receives already-resolved membership and pairs each RGB image with its `*_gtFine_labelIds.png` target.
 
 | Component | Contract |
 |---|---|
-| RGB source | `leftImg8bit` |
-| Semantic target | `gtFine/*_gtFine_labelIds.png` |
-| Label conversion | Official raw ID to train ID `0..18`; ignored labels to `255` |
-| Image tensor | `[3, H, W]`, `torch.float32`; 512x256 baseline, 640x320 in B04 |
-| Target tensor | `[H, W]`, `torch.int64` |
+| Label mapping | Official raw IDs → train IDs `0..18`; ignored labels → `255` |
+| Final image tensor | `[3, 320, 640]`, `torch.float32` |
+| Final target tensor | `[320, 640]`, `torch.int64` |
 | Image resize | Bilinear interpolation |
 | Mask resize | Nearest-neighbor interpolation |
 | Normalization | ImageNet mean and standard deviation |
-| Training geometry | Resize plus synchronized horizontal flip, `p=0.5` |
-| Validation geometry | Deterministic resize, no random augmentation |
+| Training augmentation | Synchronized horizontal flip, `p=0.5` |
+| Validation preprocessing | Deterministic resize; no augmentation or TTA |
 
-Nearest-neighbor interpolation preserves categorical mask IDs; continuous interpolation could create invalid class values. Unknown raw IDs raise explicitly instead of being silently remapped.
+Nearest-neighbor mask interpolation preserves categorical IDs. Unknown raw IDs raise an error instead of being silently remapped.
 
-## Model architecture
+## Frozen model
 
-The baseline is a custom U-Net with no pretrained encoder:
+The final development winner is a custom U-Net trained from scratch:
 
 ```text
-Input       [B, 3, H, W]
-Encoder     64 -> 128 -> 256 -> 512
-Bottleneck  1024
-Decoder     512 -> 256 -> 128 -> 64
-Classifier  64 -> 19
-Output      [B, 19, H, W]
+Input       [B, 3, 320, 640]
+Encoder     64 → 128 → 256 → 512
+Bottleneck  1024 channels, dilation=2
+Decoder     512 → 256 → 128 → 64
+Classifier  64 → 19
+Output      [B, 19, 320, 640] raw logits
 ```
 
-It uses four encoder and four decoder stages, `Conv2d -> BatchNorm2d -> ReLU` blocks, max-pooling, transposed-convolution upsampling, and channel-wise skip concatenation. The model returns raw logits for cross-entropy loss; it does not apply softmax or argmax in `forward()`.
+- Four encoder and four decoder stages.
+- BatchNorm/ReLU double-convolution blocks.
+- Max-pooling, transposed-convolution upsampling, and skip concatenation.
+- `base_channels=64`, 19 output classes.
+- **31,038,803 trainable parameters.**
+- No pretrained encoder.
 
-- Base channels: 64
-- Trainable parameters: **31,038,803**
-- Training precision: FP32
-- Pretraining: none
-- Verified local feasibility: batch size 2 at both 512x256 and 640x320 on an RTX 3050 Laptop GPU with 4 GB VRAM
+Setting bottleneck dilation to 2 changes each bottleneck convolution's effective sampling footprint from 3×3 to 5×5 while preserving feature-map dimensions, channel counts, and parameter count.
 
 ## Evaluation methodology
 
-The primary metric is **mean intersection over union (mIoU)**. Secondary metrics are per-class IoU, mean/per-class Dice, and pixel accuracy.
+Metrics come from one accumulated 19×19 confusion matrix over each complete evaluation pass:
 
-Metrics are derived from one accumulated 19x19 confusion matrix across the full validation pass:
-
-- rows: ground-truth classes;
-- columns: predicted classes;
+- rows are ground-truth classes;
+- columns are predicted classes;
 - target pixels equal to `255` are excluded;
-- absent-class IoU and Dice are undefined and omitted from macro means.
+- mIoU is the primary model-selection metric;
+- per-class IoU, Dice, and pixel accuracy are secondary metrics;
+- absent-class values are omitted from macro means rather than treated as zero.
 
-The implementation accumulates pixels across batches before computing metrics; it does not average batch-level IoUs.
+The implementation never averages batch-level IoUs.
 
-## Training infrastructure
+## Controlled experiment progression
 
-The implemented engine provides:
+Every baseline changed one predeclared mechanism while preserving the development split and selection rule.
 
-- `train_one_epoch` and `validate_one_epoch`;
-- sample-weighted epoch loss aggregation;
-- accumulated validation metrics;
-- finite-loss checks;
-- `best.pt` selection by development-validation mIoU;
-- `last.pt` checkpoints;
-- model and optimizer restore/resume support;
-- deterministic split validation and seeded experiment setup;
-- incremental CSV epoch history and reproducible locked experiment runners.
+| Experiment | Controlled change | Resolution | Best epoch | Dev mIoU | Mean Dice | Pixel accuracy |
+|---|---|---:|---:|---:|---:|---:|
+| B01 | Plain cross-entropy | 512×256 | 26 | 0.524634 | 0.641598 | 0.928686 |
+| B02 | Frequency^-0.5 weighted CE | 512×256 | 28 | 0.551079 | 0.684990 | 0.912909 |
+| B03 | Frequency^-0.25 weighted CE | 512×256 | 30 | 0.561506 | 0.689985 | 0.926736 |
+| B04 | Higher resolution only | 640×320 | 30 | 0.569926 | 0.698703 | 0.927832 |
+| **B05** | **Dilated bottleneck only** | **640×320** | **30** | **0.582557** | **0.711907** | **0.929086** |
 
-Checkpoint loading includes compatibility coverage for the current format. Python, NumPy, PyTorch, and CUDA RNGs are seeded with 42 for the reported experiments; fully deterministic CUDA algorithms were not forced.
+![Development metrics across Baselines 01-05](docs/figures/experiment_metrics.png)
 
-## Controlled experiment protocol
+The progression was evidence-driven:
 
-All four completed baselines used the same locked protocol except for one predeclared change per experiment: loss weighting in Baselines 02-03, then input resolution in Baseline 04.
+- **B01:** plain CE exposed severe rare-class underprediction.
+- **B02:** stronger inverse-frequency weighting recovered rare classes but caused broad overprediction and common-class regressions.
+- **B03:** milder weighting retained useful rare-class gains while restoring common-class balance.
+- **B04:** higher resolution improved aggregate performance, but class-level effects were mixed and scene-sensitive.
+- **B05:** bottleneck dilation broadened context sampling and produced the best development mIoU, including a strong truck recovery, while motorcycle remained a tradeoff.
+
+The project stopped after B05: five controlled hypotheses had established a clear winner, remaining errors were increasingly sparse and city-specific, and further development tuning risked becoming hyperparameter fishing.
+
+![Evidence-driven experiment progression](docs/figures/experiment_progression.png)
+
+### Locked B05 training configuration
 
 | Setting | Value |
 |---|---|
-| Model | Custom U-Net, `base_channels=64` |
-| Resolution | 512x256 through B03; 640x320 in B04 |
+| Loss | Weighted `CrossEntropyLoss(ignore_index=255)` |
+| Class weights | Dev-train-only normalized frequency^-0.25 |
 | Optimizer | AdamW |
-| Learning rate | `1e-3` |
-| Weight decay | `1e-4` |
+| Learning rate / weight decay | `1e-3` / `1e-4` |
 | Batch size | 2 |
-| Epochs | 30, no early stopping |
+| Epochs | 30; no early stopping |
 | Scheduler | CosineAnnealingLR, `T_max=30`, `eta_min=1e-5` |
-| Seed | 42 |
-| Precision | FP32 |
-| Training augmentation | Synchronized horizontal flip, `p=0.5` |
-| Model selection | Highest development-validation mIoU |
+| Seed / precision | 42 / FP32 |
+| Model selection | Highest city-separated development-validation mIoU |
 
-### Baseline 01 — plain cross-entropy
+## Final held-out evaluation
 
-Baseline 01 used `CrossEntropyLoss(ignore_index=255)`. Its best checkpoint occurred at epoch 26:
+After freezing Baseline 05, its epoch-30 checkpoint was evaluated **exactly once** on all 500 images in the untouched official Cityscapes validation split.
 
-- mIoU: **0.524634**
-- Mean Dice: **0.641598**
-- Pixel accuracy: **0.928686**
+There was no retraining, checkpoint reselection, threshold tuning, test-time augmentation, preprocessing change, or post-hoc model change. The evaluation used 640×320 deterministic preprocessing, FP32 CUDA inference, and a single confusion matrix accumulated across all valid pixels.
 
-Road, sky, car, vegetation, and building were the strongest classes. Rider, motorcycle, train, truck, and bus were among the weakest. In particular:
+| Metric | Development validation | Official validation | Gap |
+|---|---:|---:|---:|
+| mIoU | 0.582557 | **0.529051** | -0.053506 |
+| Mean Dice | 0.711907 | **0.655063** | -0.056844 |
+| Pixel accuracy | 0.929086 | **0.919040** | -0.010045 |
 
-- rider: IoU `0.0246`, recall `0.0256`, predicted/GT ratio `0.068x`;
-- motorcycle: IoU `0.1793`, predicted/GT ratio `0.469x`.
+### Official-validation per-class IoU
 
-#### Baseline 01 failure analysis
+| Class | IoU | Class | IoU |
+|---|---:|---|---:|
+| road | 0.9638 | sidewalk | 0.7292 |
+| building | 0.8559 | wall | 0.3038 |
+| fence | 0.3503 | pole | 0.4370 |
+| traffic light | 0.3590 | traffic sign | 0.4870 |
+| vegetation | 0.8797 | terrain | 0.4926 |
+| sky | 0.9103 | person | 0.5496 |
+| rider | 0.2248 | car | 0.8746 |
+| truck | 0.3107 | bus | 0.4158 |
+| train | 0.1706 | motorcycle | 0.1645 |
+| bicycle | 0.5729 |  |  |
 
-The failure analysis showed systematic rare-class under-prediction:
+![All 19 official-validation per-class IoUs](docs/figures/final_per_class_iou.png)
 
-- 73.34% of rider pixels were predicted as person;
-- motorcycle was most often confused with person (27.20%) and car (25.40%);
-- train was frequently confused with building (32.57%), bus (14.64%), and truck (8.10%).
+## Generalization and limitations
 
-The evidence was consistent with both class imbalance and spatial/detail difficulty at 512x256. Pixel-level diagnostics alone cannot establish object-size causality. This analysis motivated weighted cross-entropy as the next **single** controlled change.
+The held-out mIoU was `0.053506` below development validation. Large structural classes—road, sky, vegetation, car, and building—generalized strongly. Train, motorcycle, terrain, truck, and rider showed the largest IoU drops.
 
-### Baseline 02 — sqrt-inverse-frequency weighted cross-entropy
+Official-validation class composition also differed from the three development-validation cities: bicycle, rider, bus, and thin street-object shares were higher, while train, wall, terrain, and motorcycle shares were lower. These differences are descriptive context, not proof that composition alone caused the generalization gap.
 
-Baseline 02 changed only the class weighting applied to cross-entropy. Weights were calculated from the 2,662-image development-training split only:
+Remaining limitations include:
+
+- sparse-class and city/scene sensitivity;
+- semantic interchange among related vehicles;
+- weak rider and motorcycle separation;
+- boundary/detail errors for thin structures;
+- a custom U-Net whose capacity and context handling remain modest relative to modern segmentation architectures;
+- one local hardware/software environment and no official test-set metrics.
+
+The held-out result demonstrates why development metrics alone are insufficient and is reported without further model adjustment.
+
+## Qualitative official-validation examples
+
+These are fixed indices from the evaluator's evenly spaced deterministic sample set—not performance-ranked or cherry-picked examples. Each panel shows RGB, ground truth, and the frozen B05 prediction.
+
+<p align="center">
+  <img src="docs/figures/final_examples/000_frankfurt_000000_000294_leftImg8bit.png" alt="Official validation index 0 segmentation example" width="100%">
+  <img src="docs/figures/final_examples/213_frankfurt_000001_062016_leftImg8bit.png" alt="Official validation index 213 segmentation example" width="100%">
+  <img src="docs/figures/final_examples/427_munster_000101_000019_leftImg8bit.png" alt="Official validation index 427 segmentation example" width="100%">
+</p>
+
+## Engineering highlights
+
+- Immutable, Git-ignored raw dataset with a read-only integrity audit.
+- Deterministic city-level development split and leakage checks.
+- Official raw-label → train-ID mapping with explicit unknown-ID failures.
+- Synchronized image/mask transforms with interpolation-safe masks.
+- Confusion-matrix metrics accumulated over complete evaluation passes.
+- Checkpoint save/resume and backward-compatible state-dict loading.
+- Reproducible locked experiment runners and incremental histories.
+- Controlled one-variable experiments supported by targeted failure analysis.
+- CUDA memory feasibility probes before higher-resolution training.
+- Frozen, one-time held-out official-validation evaluation.
+
+## Reproducibility
+
+Major scripts:
 
 ```text
-weight[c] proportional to frequency[c]^-0.5
-mean(weight) = 1
-```
-
-Development validation, official validation, and official test pixels were excluded from the weight calculation. The exact weights are regenerated by [`scripts/compute_class_weights.py`](scripts/compute_class_weights.py); the remaining model and training configuration was identical to Baseline 01.
-
-The best checkpoint occurred at epoch 28:
-
-- mIoU: **0.551079** (`+0.026445`)
-- Mean Dice: **0.684990** (`+0.043392`)
-- Pixel accuracy: **0.912909** (`-0.015777`)
-
-Weighted and unweighted loss magnitudes are not directly comparable as model-quality measures.
-
-#### Rare-class improvements
-
-| Class | Baseline 01 IoU | Baseline 02 IoU | Baseline 01 recall | Baseline 02 recall |
-|---|---:|---:|---:|---:|
-| rider | 0.0246 | **0.3619** | 0.0256 | **0.6032** |
-| motorcycle | 0.1793 | **0.3630** | 0.2233 | **0.5866** |
-| train | 0.2260 | **0.3448** | 0.3113 | **0.5359** |
-| truck | 0.2539 | **0.3427** | 0.3945 | **0.6135** |
-| bus | 0.2757 | **0.4193** | 0.3836 | **0.6023** |
-
-Precision also improved for all five classes, so these gains were not solely indiscriminate rare-class overprediction.
-
-#### Tradeoffs and failure analysis
-
-Traffic-light recall improved, but precision collapsed as predictions expanded well beyond the ground-truth volume:
-
-| Traffic-light metric | Baseline 01 | Baseline 02 |
-|---|---:|---:|
-| Precision | 0.7209 | 0.3716 |
-| Recall | 0.4107 | 0.6539 |
-| IoU | 0.3544 | 0.3105 |
-| Predicted/GT ratio | 0.570x | 1.760x |
-
-The principal traffic-light false-positive sources were building (53.37%), vegetation (28.30%), and pole (10.68%). False positives appeared in 295 of 313 development-validation images, indicating a broad systematic effect rather than a handful of outlier scenes.
-
-Common-class IoU regressions were:
-
-| Class | IoU change |
-|---|---:|
-| sidewalk | -0.0341 |
-| building | -0.0297 |
-| sky | -0.0284 |
-| vegetation | -0.0207 |
-| car | -0.0155 |
-| road | -0.0083 |
-
-Confusion changes included strong increases in building to traffic-light predictions, person to rider predictions, and car to truck/motorcycle predictions. These patterns are **consistent with weighting-driven redistribution**, but the comparison does not by itself prove causality.
-
-### Baseline 03 — mild weighted cross-entropy
-
-Baseline 03 changed only the class-weight exponent from `frequency^-0.5` to `frequency^-0.25`. Weights were again derived exclusively from development train and normalized to a mean of one. Architecture, resolution, augmentation, optimizer, scheduler, batch size, epoch count, seed, and model-selection policy remained identical to Baseline 02.
-
-The milder profile reduced the max/min weight ratio from approximately `19.48x` to `4.41x`. Selected weights were:
-
-| Class | Weight | Class | Weight | Class | Weight |
-|---|---:|---|---:|---|---:|
-| road | 0.386984 | traffic light | 1.400442 | rider | 1.577222 |
-| building | 0.437245 | motorcycle | 1.708051 | truck | 1.324234 |
-| car | 0.584177 | train | 1.367434 | bus | 1.374885 |
-
-The best checkpoint occurred at epoch 30:
-
-- mIoU: **0.561506**
-- Mean Dice: **0.689985**
-- Pixel accuracy: **0.926736**
-
-This became the strongest development result before the controlled resolution experiment.
-
-#### Common-class recovery
-
-Baseline 03 recovered most or all of the common-class regression introduced by the more aggressive Baseline 02 weights:
-
-| Class | Baseline 02 IoU | Baseline 03 IoU |
-|---|---:|---:|
-| road | 0.9603 | **0.9675** |
-| sidewalk | 0.7681 | **0.7981** |
-| building | 0.8431 | **0.8699** |
-| vegetation | 0.8548 | **0.8701** |
-| sky | 0.8777 | **0.9066** |
-| car | 0.8802 | **0.8994** |
-
-#### Priority-class tradeoff
-
-| Class | Baseline 01 IoU | Baseline 02 IoU | Baseline 03 IoU |
-|---|---:|---:|---:|
-| rider | 0.0246 | **0.3619** | 0.2751 |
-| motorcycle | 0.1793 | **0.3630** | 0.3165 |
-| train | 0.2260 | **0.3448** | 0.2732 |
-| truck | 0.2539 | 0.3427 | **0.3581** |
-| bus | 0.2757 | **0.4193** | 0.3362 |
-| traffic light | 0.3544 | 0.3105 | **0.3850** |
-| bicycle | 0.4474 | 0.4316 | **0.4719** |
-
-The milder weights gave up some of Baseline 02's largest rider, motorcycle, train, and bus gains, but retained substantial improvement over plain cross-entropy while restoring common-class quality and improving aggregate mIoU.
-
-Traffic-light behavior became substantially more balanced:
-
-| Traffic-light metric | Baseline 01 | Baseline 02 | Baseline 03 |
-|---|---:|---:|---:|
-| Precision | 0.7209 | 0.3716 | 0.5460 |
-| Recall | 0.4107 | 0.6539 | 0.5664 |
-| IoU | 0.3544 | 0.3105 | **0.3850** |
-| Predicted/GT ratio | 0.570x | 1.760x | **1.037x** |
-
-Baseline 03 largely corrected Baseline 02's traffic-light overprediction while retaining higher recall than Baseline 01. This does not imply perfect probability calibration.
-
-#### Baseline 03 residual failure analysis
-
-The independently recomputed 19x19 confusion matrix matched the saved Baseline 03 result exactly. Residual focus-class behavior was:
-
-| Class | Precision | Recall | IoU | Predicted/GT |
-|---|---:|---:|---:|---:|
-| rider | 0.5233 | 0.3671 | 0.2751 | 0.701x |
-| motorcycle | 0.4890 | 0.4729 | 0.3165 | 0.967x |
-| train | 0.4088 | 0.4516 | 0.2732 | 1.105x |
-| bus | 0.5554 | 0.4600 | 0.3362 | 0.828x |
-
-Rider remained strongly confused with person. Motorcycle errors were distributed across rider, bicycle, person, and car. Train was primarily confused with building and bus, while bus was primarily confused with train and truck.
-
-Component-size diagnostics showed a steep performance drop for small and medium semantic regions at the 256x512 tensor resolution:
-
-| Class | Small recall proxy | Medium recall proxy | Large recall proxy | Approx. components below 50 px |
-|---|---:|---:|---:|---:|
-| rider | 0.011 | 0.056 | 0.392 | 53.9% |
-| motorcycle | 0.053 | 0.196 | 0.495 | 44.7% |
-| train | 0.000 | 0.004 | 0.477 | 21.7% |
-| bus | 0.038 | 0.050 | 0.473 | 38.6% |
-
-The component bins use observed per-class area tertiles, and original-resolution component area divided by 16 provides the below-50-pixel estimate. This is a diagnostic semantic-mask proxy, not official Cityscapes instance-size evaluation.
-
-Boundary errors were also substantially higher than interior errors:
-
-| Class | Boundary error | Interior error |
-|---|---:|---:|
-| rider | 79.95% | 46.02% |
-| motorcycle | 69.62% | 44.38% |
-| train | 75.29% | 51.51% |
-| bus | 69.18% | 51.62% |
-
-The result supports detail/localization as a meaningful residual problem, but high interior error shows that higher resolution cannot be expected to eliminate semantic confusion by itself. Across all 19 classes, Spearman rank correlation was `0.8719` between validation support and IoU and `0.8421` between support and recall. Rare support therefore remains strongly associated with weaker performance after mild weighting; the relationship is descriptive, not causal proof.
-
-### Baseline 04 - higher resolution
-
-Baseline 04 tested the detail-resolution hypothesis with one controlled change: input resolution increased from 512x256 to 640x320. It reused the exact Baseline 03 class weights and retained the same architecture, batch size, augmentation, optimizer, scheduler, seed, precision, epoch count, and model-selection rule.
-
-- Best epoch: **30**
-- mIoU: **0.569926**
-- Mean Dice: **0.698703**
-- Pixel accuracy: **0.927832**
-- Runtime: approximately **7h 55m**, or **28.5%** longer than Baseline 03
-- Peak CUDA memory: approximately **2,651 MiB allocated** and **3,144 MiB reserved**
-
-The higher resolution produced a modest aggregate improvement at a material compute cost. Its largest per-class IoU gains over Baseline 03 were bus (`+0.069541`), train (`+0.063427`), motorcycle (`+0.062219`), bicycle (`+0.030667`), and fence (`+0.029943`). Truck (`-0.075508`), traffic light (`-0.032297`), and traffic sign (`-0.016041`) regressed.
-
-![Baseline 04 per-class IoU change relative to Baseline 03](docs/figures/b04_per_class_iou_delta.png)
-
-#### Baseline 04 residual analysis
-
-The higher-resolution result only partially supports the original small-region hypothesis:
-
-- small-component recall did not improve broadly; gains were more consistent for medium or large components;
-- boundary improvements were mixed rather than universal;
-- truck precision and recall both fell, with increased semantic redistribution toward building and car across multiple scenes;
-- train and bus improved overall, but Krefeld contributed disproportionately and train/bus interchange remained substantial;
-- traffic-light prediction volume moved close to GT (`0.994x`), yet precision and recall both declined because localization and coverage worsened;
-- traffic-light/sign confusion increased modestly.
-
-These findings are consistent with resolution providing useful detail for some scenes and large vehicle regions while leaving semantic allocation and scene-context ambiguity unresolved. They do not establish architectural causality.
-
-The normalized confusion, scene-concentration, component, boundary, and bootstrap diagnostics are reproducible with [`scripts/analyze_baseline_04.py`](scripts/analyze_baseline_04.py); generated experiment outputs remain intentionally Git-ignored.
-
-## Current conclusion and next hypothesis
-
-**Current best development model:** Baseline 04 - higher resolution, selected by the highest city-separated development-validation mIoU of **0.569926**. It is not designated as the final model. The 500-image official validation set remains untouched, and official test is not used for local semantic metrics.
-
-The next proposed controlled experiment is **Baseline 05 - dilated bottleneck**. The only proposed change is to set `dilation=2` and `padding=2` in the two U-Net bottleneck convolutions, instead of `dilation=1` and `padding=1`. Resolution remains 640x320 and every other Baseline 04 setting remains locked.
-
-This tests whether broader effective context reduces vehicle-class and city-specific semantic allocation errors. It is better supported than another resolution increase or another blind weight-exponent search. **Baseline 05 has not been run.**
-
-![Controlled experiment progression from Baseline 01 through the proposed Baseline 05](docs/figures/experiment_progression.png)
-
-## Project structure
-
-```text
-configs/
-  splits/                         Deterministic city-level split manifest
-docs/figures/                     Tracked experiment-summary visuals
-reports/                          Tracked dataset-audit summaries
 scripts/
-  inspect_cityscapes.py           Dataset preflight utility
-  compute_class_weights.py        Dev-train-only class-weight calculation
-  run_baseline_01.py              Locked Baseline 01 runner
-  analyze_baseline_01.py          Baseline 01 failure analysis
-  run_baseline_02.py              Locked Baseline 02 runner
-  analyze_baseline_02.py          Baseline 02 regression analysis
-  run_baseline_03.py              Locked Baseline 03 runner
-  analyze_baseline_03.py          Baseline 03 residual analysis and memory probes
-  run_baseline_04.py              Locked higher-resolution experiment runner
-  analyze_baseline_04.py          Baseline 04 residual and context analysis
-  generate_readme_figures.py      Reproducible tracked README figures
-src/cityscapes_segmentation/
-  data/                            Labels, splits, Dataset, paired transforms
-  models/                          Custom U-Net
-  engine/                          Train/validate and checkpoint handling
-  analysis/                        Confusion-matrix segmentation metrics
-tests/                             Unit and optional local integration tests
+  inspect_cityscapes.py
+  compute_class_weights.py
+  run_baseline_01.py ... run_baseline_05.py
+  analyze_baseline_01.py ... analyze_baseline_05.py
+  evaluate_official_val.py
+  generate_readme_figures.py
 ```
 
-Raw data, experiment outputs, and checkpoints are intentionally excluded from Git.
+Core package structure:
 
-## Environment setup
+```text
+configs/splits/                  Deterministic split manifest
+reports/                         Tracked dataset-audit summaries
+docs/figures/                    Tracked portfolio figures
+src/cityscapes_segmentation/
+  data/                          Labels, splits, Dataset, transforms
+  models/                        Custom U-Net
+  engine/                        Training, validation, checkpoints
+  analysis/                      Confusion-matrix metrics
+tests/                           Unit and local integration tests
+```
 
-The verified environment uses Python 3.12.10 from a standalone installation. On Windows, confirm that the selected interpreter is not the Anaconda base interpreter before creating the virtual environment.
+### Environment setup
+
+The verified Windows environment uses Python 3.12.10, PyTorch `2.13.0+cu130`, torchvision `0.28.0+cu130`, and CUDA 13.0.
 
 ```powershell
-py -3.12 -c "import sys; print(sys.executable)"
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -403,42 +244,20 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 pytest -q
 ```
 
-Install the matching official PyTorch build before the general requirements so the version floors retain that CUDA wheel. Select a different official PyTorch build when required by the host GPU and driver.
+Place `leftImg8bit/` and `gtFine/` under the project root. Experiment runners guard existing output/checkpoint directories against accidental overwrite. README charts are regenerated from verified embedded summary metrics:
 
-Place `leftImg8bit/` and `gtFine/` under the project dataset root expected by the scripts. The tracked split manifest determines development membership; image-level split lists are not hard-coded.
+```powershell
+python scripts/generate_readme_figures.py
+```
 
-Experiment runners are intentionally locked around their reported configurations. Existing output/checkpoint directories are guarded against accidental overwrite, and `--resume` should be used only after checking checkpoint and history integrity.
+## Testing and hardware
 
-## Testing
+**81 tests currently pass**, covering label mapping, split integrity, transforms, Dataset behavior, metrics, U-Net configuration, training/validation behavior, checkpoint compatibility, and class weighting.
 
-**76 tests currently pass.** Coverage includes:
-
-- official label mapping and unknown-ID behavior;
-- split membership and leakage checks;
-- synchronized transforms and Dataset contracts;
-- confusion-matrix metrics;
-- U-Net shapes and gradient flow;
-- training/validation engine behavior;
-- checkpoint save/load compatibility;
-- dev-train class-weight calculation.
-
-Some integration checks skip cleanly when raw Cityscapes data is unavailable.
-
-## Hardware and runtime
-
-The reported experiments ran locally on an **NVIDIA GeForce RTX 3050 Laptop GPU with 4 GB VRAM** using PyTorch `2.13.0+cu130`, torchvision `0.28.0+cu130`, and a CUDA 13.0 build.
-
-| Experiment | 30-epoch time | Peak CUDA allocated | Peak CUDA reserved |
-|---|---:|---:|---:|
-| Baseline 01 | approximately 6h 54m | — | 2,062 MiB |
-| Baseline 02 | approximately 6h 20m | — | 2,062 MiB |
-| Baseline 03 | approximately 6h 10m | approximately 1.82 GiB | approximately 2.06 GiB |
-| Baseline 04 | approximately 7h 55m | approximately 2,651 MiB | approximately 3,144 MiB |
-
-These are local workflow measurements, not hardware benchmarks.
+Reported experiments ran on an NVIDIA GeForce RTX 3050 Laptop GPU with 4 GB VRAM. Baseline 05 used FP32 with batch size 2; official-validation inference processed 500 images in approximately 113 seconds at 4.43 images/second, with approximately 1,000 MiB peak allocated and 1,418 MiB peak reserved CUDA memory. These are local workflow measurements, not general hardware benchmarks.
 
 ## Dataset source and license
 
-Cityscapes must be obtained separately from the [official Cityscapes website](https://www.cityscapes-dataset.com/). This repository does not redistribute images, annotations, or dataset archives. Local `leftImg8bit/`, `gtFine/`, `gtCoarse/`, and downloaded archives are Git-ignored.
+Cityscapes must be obtained separately from the [official Cityscapes website](https://www.cityscapes-dataset.com/). This repository does not redistribute images, annotations, or dataset archives. Use remains subject to the official Cityscapes license and terms.
 
-Use of Cityscapes data remains subject to the dataset's official license and terms. The optional [`cityscapesscripts`](https://github.com/mcordts/cityscapesScripts) dependency supplies the authoritative label definitions and related official tooling.
+The official test split was not evaluated locally for semantic metrics.
